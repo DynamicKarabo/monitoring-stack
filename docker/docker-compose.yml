@@ -46,6 +46,22 @@ services:
     volumes:
       - /:/host:ro,rslave
 
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: postgres-exporter
@@ -53,7 +69,18 @@ services:
     ports:
       - "9187:9187"
     environment:
-      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:5432/postgres?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://postgres:***@host.docker.internal:5432/postgres?sslmode=disable"
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:latest
+    container_name: blackbox-exporter
+    restart: unless-stopped
+    ports:
+      - "9115:9115"
+    command:
+      - '--config.file=/etc/blackbox/blackbox.yml'
+    volumes:
+      - ../prometheus/blackbox.yml:/etc/blackbox/blackbox.yml
 
 volumes:
   prometheus-data:

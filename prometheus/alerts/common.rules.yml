@@ -10,6 +10,24 @@ groups:
           summary: "Instance {{ $labels.instance }} down"
           description: "{{ $labels.instance }} has been down for more than 1 minute."
 
+      - alert: ServiceDown
+        expr: probe_success == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.instance }} is down"
+          description: "HTTP probe to {{ $labels.instance }} has failed for more than 1 minute."
+
+      - alert: HttpProbeFailure
+        expr: rate(probe_http_status_code{status_code!~"2..|3.."}[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP probe failure on {{ $labels.instance }}"
+          description: "Non-2xx/3xx HTTP status codes detected on {{ $labels.instance }}."
+
       - alert: HighCpuUsage
         expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
         for: 5m
