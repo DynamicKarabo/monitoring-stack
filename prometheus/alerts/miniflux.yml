@@ -1,0 +1,11 @@
+groups:
+  - name: miniflux
+    rules:
+      - alert: MinifluxProbeFailing
+        expr: probe_success{instance="http://host.docker.internal:30080"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Miniflux blackbox probe failing"
+          description: "HTTP probe to Miniflux has been failing for more than 2 minutes."
