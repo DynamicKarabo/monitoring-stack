@@ -1,24 +1,6 @@
 groups:
   - name: miniflux
     rules:
-      - alert: MinifluxDown
-        expr: up{job="miniflux"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Miniflux is down"
-          description: "Miniflux instance {{ $labels.instance }} has been unreachable for more than 1 minute."
-
-      - alert: MinifluxHighMemoryUsage
-        expr: container_memory_usage_bytes{container="miniflux"} > 500 * 1024 * 1024
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Miniflux high memory usage"
-          description: "Miniflux container memory usage is above 500MB (current: {{ $value | humanize1024 }})"
-
       - alert: MinifluxProbeFailing
         expr: probe_success{instance="http://host.docker.internal:30080"} == 0
         for: 2m

@@ -30,10 +30,6 @@ scrape_configs:
     static_configs:
       - targets: ['postgres-exporter:9187']
 
-  - job_name: 'miniflux'
-    static_configs:
-      - targets: ['host.docker.internal:30080']
-
   - job_name: 'blackbox'
     metrics_path: /probe
     params:
