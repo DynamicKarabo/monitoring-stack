@@ -11,6 +11,7 @@ alerting:
 
 rule_files:
   - "alerts/common.rules.yml"
+  - "alerts/miniflux.yml"
 
 scrape_configs:
   - job_name: 'prometheus'
@@ -29,6 +30,10 @@ scrape_configs:
     static_configs:
       - targets: ['postgres-exporter:9187']
 
+  - job_name: 'miniflux'
+    static_configs:
+      - targets: ['host.docker.internal:30080']
+
   - job_name: 'blackbox'
     metrics_path: /probe
     params:
@@ -38,6 +43,7 @@ scrape_configs:
         - http://prometheus:9090
         - http://grafana:3000
         - http://alertmanager:9093
+        - http://host.docker.internal:30080
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
