@@ -2,9 +2,9 @@ name: CI — Config validation
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: read
@@ -33,19 +33,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install promtool
+      - name: Check Prometheus config and rules
         run: |
-          wget -q https://github.com/prometheus/prometheus/releases/latest/download/prometheus-linux-amd64.tar.gz
-          tar xzf prometheus-linux-amd64.tar.gz
-          sudo cp prometheus-*/promtool /usr/local/bin/
-      - name: Check Prometheus config
-        run: promtool check config prometheus/prometheus.yml
-      - name: Check alert rules
-        run: |
-          for f in prometheus/alerts/*.yml; do
-            echo "Checking $f..."
-            promtool check rules "$f"
-          done
+          docker run --rm \
+            -v $PWD/prometheus:/prometheus:ro \
+            --entrypoint sh \
+            prom/prometheus:latest \
+            -c "
+              echo '=== Checking config ==='
+              promtool check config /prometheus/prometheus.yml
+              echo ''
+              for f in /prometheus/alerts/*.yml; do
+                echo \"=== Checking \$f ===\"
+                promtool check rules \"\$f\"
+              done
+            "
 
   grafana-validate:
     name: Grafana dashboards validate

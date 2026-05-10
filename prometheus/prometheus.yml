@@ -1,13 +1,13 @@
 # Prometheus Configuration
 global:
-  scrape_interval:     15s
+  scrape_interval: 15s
   evaluation_interval: 15s
 
 alerting:
   alertmanagers:
     - static_configs:
         - targets:
-          - alertmanager:9093
+            - alertmanager:9093
 
 rule_files:
   - "alerts/common.rules.yml"
@@ -36,10 +36,10 @@ scrape_configs:
       module: [http_2xx]
     static_configs:
       - targets:
-        - http://prometheus:9090
-        - http://grafana:3000
-        - http://alertmanager:9093
-        - http://host.docker.internal:30080
+          - http://prometheus:9090
+          - http://grafana:3000
+          - http://alertmanager:9093
+          - http://host.docker.internal:30080
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
