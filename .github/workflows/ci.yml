@@ -1,0 +1,63 @@
+name: CI — Config validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  yaml-lint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install yamllint
+        run: pip install -q yamllint
+      - name: Lint YAML files
+        run: yamllint .
+
+  compose-validate:
+    name: Docker Compose validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate Compose file
+        run: docker compose -f docker/docker-compose.yml config
+
+  prometheus-validate:
+    name: Prometheus config validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Prometheus config and rules
+        run: |
+          docker run --rm \
+            -v $PWD/prometheus:/prometheus:ro \
+            --entrypoint sh \
+            prom/prometheus:latest \
+            -c "
+              echo '=== Checking config ==='
+              promtool check config /prometheus/prometheus.yml
+              echo ''
+              for f in /prometheus/alerts/*.yml; do
+                echo \"=== Checking \$f ===\"
+                promtool check rules \"\$f\"
+              done
+            "
+
+  grafana-validate:
+    name: Grafana dashboards validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate dashboard JSONs
+        run: |
+          for f in grafana/dashboards/*.json; do
+            echo "Checking $f..."
+            jq empty "$f" || { echo "Invalid JSON: $f"; exit 1; }
+            echo "Valid JSON"
+          done
