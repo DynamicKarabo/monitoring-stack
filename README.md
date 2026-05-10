@@ -1,10 +1,29 @@
-# Monitoring Stack
+# Self-Hosted Observability Stack
 
-A containerized observability stack using Prometheus, Grafana, Alertmanager, and exporters for infrastructure and application monitoring.
+> **Prometheus + Grafana + Alertmanager + Exporters** — because SSH-tail'ing logs is not a monitoring strategy.
+
+[![Docker](https://img.shields.io/badge/docker-compose-blue?logo=docker)](https://docs.docker.com/compose/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-latest-orange?logo=prometheus)](https://prometheus.io/)
+[![Grafana](https://img.shields.io/badge/Grafana-latest-orange?logo=grafana)](https://grafana.com/)
+![CI](https://img.shields.io/badge/CI-not--yet--implemented-lightgrey)
+
+---
+
+## The Problem / Why This Stack
+
+Running a handful of services on a single VPS doesn't justify a Datadog subscription ($$$ per host), a New Relic license, or the overhead of a managed observability SaaS. But flying blind is worse:
+
+- **Before:** `docker ps`, `top`, `df -h`, and `journalctl -u` — manual, reactive, and forgotten until pager duty.
+- **The gap:** No historical metrics, no trend analysis, no alerting. If Postgres crashes at 3 AM, you find out when users do.
+- **The constraint:** Minimal budget, single VPS, containerized workload. The stack must fit in Docker Compose, auto-configure itself, and stay out of the way.
+
+This stack is the result of that constraint: a **production-grade, self-contained observability platform** that costs nothing but the VPS it runs on, delivers real-time metrics, auto-provisions dashboards, and shouts at you on Telegram when things break.
+
+---
 
 ## Architecture
 
-```mermaid
+```
 graph TD
     A[Node Exporter] -->|host metrics:9100| P[Prometheus]
     B[cAdvisor] -->|container metrics:8080| P
@@ -15,6 +34,141 @@ graph TD
     G[Grafana] -->|query| P
     H[User] -->|dashboards:3000| G
 ```
+
+### Data Flow Narrative
+
+1. **Scrape layer:** Four exporters collect host-level metrics (Node Exporter), container-level metrics (cAdvisor), PostgreSQL database metrics, and HTTP endpoint health (Blackbox Exporter).
+2. **Collection & evaluation:** Prometheus scrapes every 15s, evaluates alert rules every 15s, and stores time-series data in its own TSDB (persistent volume).
+3. **Alert routing:** When an alert fires, Prometheus pushes it to Alertmanager, which groups by `alertname` + `severity`, waits 30s for batching, and sends a Telegram notification with HTML formatting.
+4. **Visualization:** Grafana queries Prometheus via an auto-provisioned datasource and serves three pre-loaded dashboards (host, containers, Postgres) — zero configuration required.
+
+---
+
+## What Makes This Different
+
+| Before (SSH & raw logs) | After (this stack) |
+|---|---|
+| `ssh user@vps && top` | Real-time CPU/memory/disk graphs in Grafana |
+| `docker logs --tail 100` | Container-level metrics from cAdvisor |
+| Only know Postgres is down when app breaks | Postgres exporter with query performance metrics |
+| Manual `curl` to check if app is responding | Blackbox HTTP probes every 15s |
+| No alerting | Telegram alerts within 2 minutes of failure |
+| Manual dashboard setup every time | Auto-provisioned dashboards + datasource |
+| Forget about disk until it's full | `DiskSpaceLow` critical alert at 10% |
+
+**Key wins:**
+- **Zero-click setup** — deploy with one script, dashboards appear automatically
+- **Cost** — $0 beyond VPS hosting (no per-host SaaS fees)
+- **Self-contained** — everything in Docker Compose, no external dependencies
+- **Portable** — runs on any Linux box with Docker; configs are version-controlled
+
+---
+
+## Obstacles & Troubleshooting
+
+Every line in this repo was earned through trial, error, and late-night debugging. Here are the fires we put out:
+
+### 1. No CI Workflow — The Missing Safety Net
+
+**Status:** Gap (not yet implemented)
+
+There is no `.github/workflows/` directory in this repository. Configuration changes to Prometheus alert rules, Grafana dashboards, or Docker Compose go straight to production with no automated validation. This is a known improvement item (see Roadmap).
+
+### 2. Postgres Exporter → `host.docker.internal`
+
+The Postgres exporter connects to a database running on the host (not in a container) via `host.docker.internal:5432`. This works on Linux only if:
+
+- Docker Compose uses the `host` network mode, **or**
+- the `extra_hosts` directive maps `host.docker.internal` to `host-gateway` (requires Docker Compose v2+)
+- the host firewall allows port 5432 from Docker's bridge network
+
+We rely on Docker's built-in `host.docker.internal` resolution on Docker Desktop (macOS/Windows) and `extra_hosts` on Linux. If Prometheus shows `postgres-exporter` as `DOWN`, this connection is the first place to check.
+
+### 3. Blackbox Exporter Probe Timing
+
+The blackbox exporter probes multiple internal HTTP endpoints (`prometheus:9090`, `grafana:3000`, `alertmanager:9093`, and `host.docker.internal:30080` for Miniflux). With a 5-second probe timeout and 15-second scrape interval, a slow endpoint can cause cascading scrape failures. Solution: we keep the probe module simple (`GET`, 5s timeout) and rely on `miniflux.yml` for targeted Miniflux alerting.
+
+### 4. cAdvisor: Privileged Mode & `/dev/kmsg`
+
+cAdvisor needs extensive access to the host's filesystem and cgroups to report container metrics. The compose file sets:
+
+```yaml
+privileged: true
+devices:
+  - /dev/kmsg:/dev/kmsg
+```
+
+The privileged mode grants access to `/rootfs`, `/var/run`, `/sys`, and `/var/lib/docker`. The `/dev/kmsg` device mount is required on modern kernels where cAdvisor reads kernel messages for container boot timing. On some VPS kernels (e.g., OpenVZ, LXC), `/dev/kmsg` may not be available — you'll see a warning in cAdvisor logs, but metrics still work.
+
+### 5. Grafana Provisioning Path Quirks
+
+Grafana's provisioning system is picky about paths:
+
+- **Dashboards source:** `/var/lib/grafana/dashboards` (mounted from `../grafana/dashboards`)
+- **Provisioning config:** `/etc/grafana/provisioning` (mounted from `../grafana/provisioning`)
+- **Data directory:** `/var/lib/grafana` (persistent volume `grafana-data`)
+
+The dashboard provider config (`dashboards.yml`) points to `/var/lib/grafana/dashboards`, **not** the provisioning directory. This is non-obvious — if you copy the wrong path, dashboards silently fail to load.
+
+### 6. Alertmanager Telegram Webhook Setup
+
+Alertmanager uses the native `telegram_configs` receiver (built into Alertmanager v0.23+). The setup requires:
+
+1. Creating a Telegram bot via @BotFather and saving the token
+2. Finding the numeric chat ID via `https://api.telegram.org/bot<TOKEN>/getUpdates`
+3. Restarting Alertmanager to apply the config
+
+Common pitfalls: chat ID must be numeric, the bot must have been sent at least one message before it shows up in `getUpdates`, and `send_resolved: true` means you'll get both firing + resolved notifications.
+
+### 7. The `:latest` Tag Tax
+
+Every image in `docker-compose.yml` uses the `:latest` tag:
+
+| Service | Image | Pinned? |
+|---|---|---|
+| Prometheus | `prom/prometheus:latest` | ❌ |
+| Grafana | `grafana/grafana:latest` | ❌ |
+| Alertmanager | `prom/alertmanager:latest` | ❌ |
+| Node Exporter | `prom/node-exporter:latest` | ❌ |
+| cAdvisor | `gcr.io/cadvisor/cadvisor:latest` | ❌ |
+| Postgres Exporter | `prometheuscommunity/postgres-exporter:latest` | ❌ |
+| Blackbox Exporter | `prom/blackbox-exporter:latest` | ❌ |
+
+This means `docker compose pull` can introduce breaking changes without warning. Pinning to a specific version (e.g., `v2.53.0`) is recommended for production.
+
+---
+
+## Component Specs
+
+Eight services orchestrated by Docker Compose:
+
+| Service | Port | Role |
+|---|---|---|
+| Prometheus | 9090 | Metrics collection, TSDB storage, alert rule evaluation |
+| Grafana | 3000 | Dashboards, visualization, auto-provisioned datasource |
+| Alertmanager | 9093 | Alert deduplication, grouping, Telegram routing |
+| Node Exporter | 9100 | Host-level metrics (CPU, memory, disk, network) |
+| cAdvisor | 8080 | Container-level resource usage & performance |
+| Postgres Exporter | 9187 | PostgreSQL query performance, connections, replication |
+| Blackbox Exporter | 9115 | HTTP/HTTPS endpoint probing, SSL expiry checks |
+| Miniflux | 30080 | RSS reader (monitored externally via blackbox) |
+
+### Resource Footprint
+
+On a typical VPS (2 vCPU, 4 GB RAM):
+
+| Component | Memory (idle) | CPU (idle) | Storage |
+|---|---|---|---|
+| Prometheus | ~150 MB | <0.5% | ~1 GB/30 days |
+| Grafana | ~80 MB | <0.3% | dashboard configs only |
+| Alertmanager | ~25 MB | <0.1% | negligible |
+| Node Exporter | ~20 MB | <0.1% | none |
+| cAdvisor | ~40 MB | <0.3% | none |
+| Postgres Exporter | ~15 MB | <0.1% | none |
+| Blackbox Exporter | ~15 MB | <0.1% | none |
+| **Total** | **~345 MB** | **~1.5%** | **~1 GB/month** |
+
+---
 
 ## Quick Start
 
@@ -32,85 +186,112 @@ cd docker
 docker compose up -d
 ```
 
-## Services
+### First-Time Setup
 
-| Service | Port | Description |
-|---------|------|-------------|
-| Prometheus | 9090 | Metrics collection & alerting |
-| Grafana | 3000 | Dashboards & visualization |
-| Alertmanager | 9093 | Alert routing & notification |
-| Node Exporter | 9100 | Host-level metrics (CPU, memory, disk) |
-| cAdvisor | 8080 | Container metrics |
-| Postgres Exporter | 9187 | PostgreSQL database metrics |
-| Blackbox Exporter | 9115 | HTTP/HTTPS endpoint probing |
+1. **Configure Telegram alerts** — Edit `alertmanager/alertmanager.yml`:
+   - Set `bot_token` to your Telegram bot token (from @BotFather)
+   - Set `chat_id` to the numeric chat ID (use `getUpdates` API to find it)
+   - Restart: `docker compose restart alertmanager`
+2. **Access Grafana** at `http://<vps-ip>:3000` (default: `admin` / `admin`)
 
-## Available Dashboards
+### Available Dashboards
 
 | Dashboard | ID | Source |
-|-----------|-----|--------|
-| Node Exporter Full | 1860 | https://grafana.com/grafana/dashboards/1860 |
-| Docker Container | 17994 | https://grafana.com/grafana/dashboards/17994 |
-| PostgreSQL | 9628 | https://grafana.com/grafana/dashboards/9628 |
+|---|---|---|
+| Node Exporter Full | 1860 | grafana.com/grafana/dashboards/1860 |
+| Docker Container | 17994 | grafana.com/grafana/dashboards/17994 |
+| PostgreSQL | 9628 | grafana.com/grafana/dashboards/9628 |
 
-Dashboards are auto-provisioned via Grafana's provisioning system — they appear automatically once Grafana starts.
+Dashboards are auto-provisioned — they appear in Grafana immediately after startup with zero manual configuration.
 
-## Alertmanager Setup
+### Alert Rules
 
-1. **Create a Telegram bot** — Talk to [@BotFather](https://t.me/BotFather) on Telegram and create a new bot. Save the bot token.
-2. **Get your chat ID** — Send a message to your bot, then visit:
-   ```
-   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
-   ```
-   Look for the `chat.id` value in the JSON response.
-3. **Configure the receiver** — Edit `alertmanager/alertmanager.yml` and replace the placeholders:
-   ```yaml
-   - bot_token: 'YOUR_TELEGRAM_BOT_TOKEN'
-     chat_id: YOUR_TELEGRAM_CHAT_ID
-   ```
-4. **Restart Alertmanager**:
-   ```bash
-   cd docker && docker compose restart alertmanager
-   ```
+| Alert | Severity | Condition |
+|---|---|---|
+| InstanceDown | critical | A Prometheus scrape target is unreachable |
+| ServiceDown | critical | An HTTP endpoint probe has failed (5xx, timeout) |
+| HttpProbeFailure | warning | Non-2xx/3xx status codes detected |
+| HighCpuUsage | warning | CPU > 80% for 5 minutes |
+| HighMemoryUsage | warning | Memory > 85% for 5 minutes |
+| DiskSpaceLow | critical | Disk space < 10% |
+| MinifluxProbeFailing | critical | Miniflux HTTP probe failing for 2+ minutes |
+
+---
+
+## CI/CD
+
+**Current state:** No CI pipeline exists. All configuration changes are applied directly on the VPS via `git pull && docker compose up -d`.
+
+**Desired state:** A GitHub Actions workflow that:
+
+- Validates Prometheus alert rules (`promtool check rules`)
+- Lints Docker Compose (`docker compose config`)
+- Lints YAML files (`yamllint`)
+- Checks for Grafana dashboards JSON validity
+- Runs on every PR to `main`
+
+This is the single biggest improvement item (see Roadmap).
+
+---
 
 ## Directory Structure
 
 ```
 monitoring-stack/
 ├── alertmanager/
-│   └── alertmanager.yml          # Alert routing & Telegram config
+│   └── alertmanager.yml           # Alert routing & Telegram config
 ├── docker/
-│   └── docker-compose.yml        # All services definition
+│   └── docker-compose.yml         # All services definition
 ├── grafana/
-│   ├── dashboards/               # Pre-loaded dashboard JSONs
+│   ├── dashboards/                # Pre-loaded dashboard JSONs
 │   │   ├── node-exporter-full.json
 │   │   ├── docker-container.json
 │   │   └── postgres.json
 │   └── provisioning/
 │       ├── dashboards/
-│       │   └── dashboards.yml    # Auto-provisioning config
+│       │   └── dashboards.yml     # Auto-provisioning config
 │       └── datasources/
-│           └── datasources.yml   # Prometheus data source
+│           └── datasources.yml    # Prometheus data source
 ├── prometheus/
 │   ├── alerts/
-│   │   └── common.rules.yml      # Alerting rules
-│   ├── blackbox.yml              # Blackbox exporter config
-│   └── prometheus.yml            # Main Prometheus config
+│   │   ├── common.rules.yml       # Core alerting rules
+│   │   └── miniflux.yml           # Miniflux-specific alerts
+│   ├── blackbox.yml               # Blackbox exporter config
+│   └── prometheus.yml             # Main Prometheus config
 ├── scripts/
-│   └── setup.sh                  # Idempotent setup script
+│   └── setup.sh                   # Idempotent bootstrap script
 ├── .gitignore
 └── README.md
 ```
 
-## Alert Rules
+---
 
-| Alert Name | Severity | Description |
-|------------|----------|-------------|
-| InstanceDown | critical | A Prometheus target is unreachable |
-| ServiceDown | critical | An HTTP endpoint probe has failed |
-| HttpProbeFailure | warning | HTTP endpoint returning non-2xx/3xx status codes |
-| HighCpuUsage | warning | CPU usage exceeds 80% for 5 minutes |
-| HighMemoryUsage | warning | Memory usage exceeds 85% for 5 minutes |
-| DiskSpaceLow | critical | Disk space falls below 10% |
+## Roadmap
+
+### Short-term
+
+- [x] **Core stack** — Prometheus, Grafana, Alertmanager, exporters
+- [x] **Auto-provisioning** — Dashboards and datasource configure themselves
+- [x] **Telegram alerting** — Real-time notifications via bot
+- [x] **Idempotent setup** — Single script to bootstrap everything
+
+### Medium-term
+
+- [ ] **Pin image versions** — Replace `:latest` with specific version tags across all services
+- [ ] **CI pipeline** — GitHub Actions workflow with Prometheus rule linting, Docker Compose validation, and YAML linting
+- [ ] **Promtool validation** — Add `promtool check rules` and `promtool check config` to the CI workflow
+- [ ] **Version dashboards** — Track dashboard JSONs in version control with changelog comments
+- [ ] **Healthcheck endpoints** — Add Docker healthchecks to every service in compose
+- [ ] **Grafana alerting** — Move some alerts from Prometheus/Alertmanager to Grafana's built-in alerting for richer notification templates
+
+### Long-term
+
+- [ ] **Log aggregation** — Add Loki + Promtail for centralized log collection
+- [ ] **Tracing** — Add Tempo or Jaeger for distributed tracing
+- [ ] **Uptime monitoring** — External synthetic checks from a second VPS or a free service (UptimeRobot, BetterStack)
+- [ ] **Backup strategy** — Automated TSDB snapshots and Grafana config backups
+
+---
 
 ## License
 
