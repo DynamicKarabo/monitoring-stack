@@ -1,0 +1,61 @@
+name: CI — Config validation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  yaml-lint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install yamllint
+        run: pip install -q yamllint
+      - name: Lint YAML files
+        run: yamllint -d "extends: default" .
+
+  compose-validate:
+    name: Docker Compose validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate Compose file
+        run: docker compose -f docker/docker-compose.yml config
+
+  prometheus-validate:
+    name: Prometheus config validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install promtool
+        run: |
+          wget -q https://github.com/prometheus/prometheus/releases/latest/download/prometheus-linux-amd64.tar.gz
+          tar xzf prometheus-linux-amd64.tar.gz
+          sudo cp prometheus-*/promtool /usr/local/bin/
+      - name: Check Prometheus config
+        run: promtool check config prometheus/prometheus.yml
+      - name: Check alert rules
+        run: |
+          for f in prometheus/alerts/*.yml; do
+            echo "Checking $f..."
+            promtool check rules "$f"
+          done
+
+  grafana-validate:
+    name: Grafana dashboards validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate dashboard JSONs
+        run: |
+          for f in grafana/dashboards/*.json; do
+            echo "Checking $f..."
+            jq empty "$f" || { echo "Invalid JSON: $f"; exit 1; }
+            echo "Valid JSON"
+          done
