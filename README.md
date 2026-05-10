@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/docker-compose-blue?logo=docker)](https://docs.docker.com/compose/)
 [![Prometheus](https://img.shields.io/badge/Prometheus-latest-orange?logo=prometheus)](https://prometheus.io/)
 [![Grafana](https://img.shields.io/badge/Grafana-latest-orange?logo=grafana)](https://grafana.com/)
-![CI](https://img.shields.io/badge/CI-not--yet--implemented-lightgrey)
+[![CI](https://github.com/DynamicKarabo/monitoring-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/DynamicKarabo/monitoring-stack/actions/workflows/ci.yml)
 
 ---
 
@@ -68,11 +68,9 @@ graph TD
 
 Every line in this repo was earned through trial, error, and late-night debugging. Here are the fires we put out:
 
-### 1. No CI Workflow — The Missing Safety Net
+### 1. No CI Workflow — The Missing Safety Net (Solved ✅)
 
-**Status:** Gap (not yet implemented)
-
-There is no `.github/workflows/` directory in this repository. Configuration changes to Prometheus alert rules, Grafana dashboards, or Docker Compose go straight to production with no automated validation. This is a known improvement item (see Roadmap).
+**Status:** Resolved — CI pipeline is live at `.github/workflows/ci.yml` with YAML linting, Docker Compose validation, Prometheus config validation, and Grafana dashboard JSON checks.
 
 ### 2. Postgres Exporter → `host.docker.internal`
 
@@ -220,17 +218,19 @@ Dashboards are auto-provisioned — they appear in Grafana immediately after sta
 
 ## CI/CD
 
-**Current state:** No CI pipeline exists. All configuration changes are applied directly on the VPS via `git pull && docker compose up -d`.
+**Status:** ✅ Implemented — GitHub Actions workflow runs on every PR and push to `main`.
 
-**Desired state:** A GitHub Actions workflow that:
+The [CI pipeline](.github/workflows/ci.yml) validates all config changes before deployment:
 
-- Validates Prometheus alert rules (`promtool check rules`)
-- Lints Docker Compose (`docker compose config`)
-- Lints YAML files (`yamllint`)
-- Checks for Grafana dashboards JSON validity
-- Runs on every PR to `main`
+| Check | Tool | What it validates |
+|---|---|---|
+| YAML lint | `yamllint` | All `.yml` files follow consistent formatting |
+| Compose validate | `docker compose config` | Compose file is syntactically valid |
+| Prometheus config | `promtool check config` | Prometheus scrape targets, rule files, and global config |
+| Alert rules | `promtool check rules` | All alert rule files are valid PromQL |
+| Dashboard JSON | `jq` | Grafana dashboard JSONs are valid and parseable |
 
-This is the single biggest improvement item (see Roadmap).
+This replaces the previous manual deploy process (`git pull && docker compose up -d`) with an automated validation gate — broken configs never reach production.
 
 ---
 
@@ -278,8 +278,8 @@ monitoring-stack/
 ### Medium-term
 
 - [ ] **Pin image versions** — Replace `:latest` with specific version tags across all services
-- [ ] **CI pipeline** — GitHub Actions workflow with Prometheus rule linting, Docker Compose validation, and YAML linting
-- [ ] **Promtool validation** — Add `promtool check rules` and `promtool check config` to the CI workflow
+- [x] **CI pipeline** — GitHub Actions workflow with Prometheus rule linting, Docker Compose validation, and YAML linting
+- [x] **Promtool validation** — `promtool check rules` and `promtool check config` running in CI
 - [ ] **Version dashboards** — Track dashboard JSONs in version control with changelog comments
 - [ ] **Healthcheck endpoints** — Add Docker healthchecks to every service in compose
 - [ ] **Grafana alerting** — Move some alerts from Prometheus/Alertmanager to Grafana's built-in alerting for richer notification templates
